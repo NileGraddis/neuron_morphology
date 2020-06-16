@@ -400,6 +400,17 @@ def shared_faces(poly, others):
             continue
         _forward, backward = geom_collection
         faces = shapely.ops.linemerge(backward)
+
+        if isinstance(faces, shapely.geometry.multilinestring.MultiLineString):
+            mlen = -1
+            new_faces = None
+            for item in faces:
+                clen = len(item.coords)
+                if clen > mlen:
+                    mlen = clen
+                    new_faces = item
+            faces = new_faces
+
         if not faces.is_empty:
             faces_list.append(faces)
 
