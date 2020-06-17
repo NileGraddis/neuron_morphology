@@ -77,29 +77,20 @@ def run_snap_polygons(
     wm_surface, 
     layer_order,
     working_scale: float,
-    images=None
+    images=None,
+    surface_distance_threshold: float = 400.0
 ):
     """
     """
 
+    # setup input geometries
     geometries = Geometries()
     geometries.register_polygons(layer_polygons)
     
-    union = None
-    for key, poly in geometries.polygons.items():
-        if union is None:
-            union = poly
-        else:
-            # Why convex hull? Sometimes layer drawings are not simple
-            # polygons - the corners are actually loops and the coordinates 
-            # self-intersect. Since for now we are just interested in trimming 
-            # distant surface points, this is good enough
-            ls = shapely.geometry.LineString(poly.exterior)
-            union = poly.convex_hull.union(union.convex_hull)
-
-    threshold = 400
-    pia = trim_to_close(union, threshold, pia_surface["path"])
-    wm = trim_to_close(union, threshold, wm_surface["path"])
+    # setup cortex boundaries
+    hull = geometries.convex_hull()
+    pia = trim_to_close(hull, surface_distance_threshold, pia_surface["path"])
+    wm = trim_to_close(hull, surface_distance_threshold, wm_surface["path"])
     
     geometries.register_surface("pia", pia)
     geometries.register_surface("wm", wm)
@@ -107,70 +98,28 @@ def run_snap_polygons(
     pia_wm_vertices = get_vertices_from_two_lines(pia.coords[:], wm.coords[:])
     bounds = shapely.geometry.polygon.Polygon(pia_wm_vertices)
 
-
-    scale_transform = make_scale(working_scale)
-    working_geo = geometries.transform(scale_transform)
-
-    raster_stack = working_geo.rasterize()
-    clear_overlaps(raster_stack)
-    closest, closest_names = closest_from_stack(raster_stack)
-
-    snapped_polys = get_snapped_polys(closest, closest_names)
-
-    result_geos = Geometries()
-    result_geos.register_polygons(snapped_polys)
-
-    result_geos = (result_geos
-        .transform(
-            lambda ht, vt: (
-                ht + working_geo.close_bounds.horigin,
-                vt + working_geo.close_bounds.vorigin
-            )
-        )
-        .transform(make_scale(1.0 / working_scale))
+    # go!
+    result_geos = (
+        geometries
+        .fill_gaps(working_scale)
+        .cut(bounds)
     )
 
-    for key in list(result_geos.polygons.keys()):
-        poly = result_geos.polygons[key].intersection(bounds)
-
-        if isinstance(poly, shapely.geometry.GeometryCollection):
-            poly = shapely.geometry.MultiPolygon([
-                item for item in poly 
-                if isinstance(item, shapely.geometry.Polygon)
-            ])
-
-        if isinstance(poly, shapely.geometry.MultiPolygon):
-            max_area = -np.inf
-            min_area = np.inf
-            largest = None
-            for item in poly:
-                area = item.area
-                if area > max_area:
-                    max_area = area
-                    largest = item
-                if area < min_area:
-                    min_area = area
-            
-            poly = largest
-
-        result_geos.polygons[key] = poly
-
+    # get output surfaces
     boundaries = find_vertical_surfaces(
         result_geos.polygons, 
         layer_order, 
         pia=geometries.surfaces["pia"], 
         wm=geometries.surfaces["wm"]
     )
-
     result_geos.register_surfaces(boundaries)        
 
+    # write results
     outputter = ImageOutputter(
         geometries, result_geos, images
     )
-
     results = result_geos.to_json()
     results["images"] = outputter.write_images()
-
     return results
 
 

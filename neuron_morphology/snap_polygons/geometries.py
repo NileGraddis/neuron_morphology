@@ -185,6 +185,56 @@ class Geometries:
 
         return out
 
+    def fill_gaps(self, working_scale: float = 1.0) -> "Geometries":
+        """
+        """
+
+        scale_to_working = make_scale(working_scale)
+        working_geometries = self.transform(scale_to_working)
+
+        raster_stack = working_geometries.rasterize()
+        clear_overlaps(raster_stack)
+        closest, closest_names = closest_from_stack(raster_stack)
+        snapped_polygons = get_snapped_polys(closest, closest_names)
+
+        result_geometries = Geometries()
+        result_geometries.register_polygons(snapped_polygons)
+
+        translation_from_working = make_translation(
+            working_geometries.close_bounds.horigin, 
+            working_geometries.close_bounds.vorigin
+        )
+        scale_from_working = make_scale(1.0 / working_scale)
+
+        return (
+            result_geometries
+                .transform(translation_from_working)
+                .transform(scale_from_working)
+        )
+
+    def cut(self, template) -> "Geometries":
+        result = Geometries()
+
+        for key, polygon in self.polygons.items():
+            result.register_polygon(key, polygon.intersection(template))
+
+        for key, surface in self.surfaces.items():
+            result.register_surface(key, surface.intersection(template))
+    
+        return result
+
+    def convex_hull(self):
+        hull = None
+        for polygon in self.polygons.values():
+            if hull is None:
+                # why the intermediate hull-taking? Some layer polygons have 
+                # loops at the corners. This breaks the union operation, since
+                # they don't have a defined interior/exterior.
+                hull = polygon.convex_hull
+            else:
+                hull = polygon.convex_hull.union(hull)
+        return hull.convex_hull
+
     def to_json(self) -> Dict:
         """ Write contained polygons to a json-serializable format
         """
@@ -233,6 +283,10 @@ def rasterize(
         [(geometry, 1)],
         out_shape=out_shape
     )
+
+
+def make_translation(horizontal, vertical):
+    return lambda ht, vt: (ht + horizontal, vt + vertical)
 
 
 def make_scale(
