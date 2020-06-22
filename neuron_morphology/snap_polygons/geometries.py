@@ -1,6 +1,8 @@
-from typing import Optional, Dict, Union, Sequence, Callable, Tuple
+from typing import Optional, Dict, Union, Sequence, Callable, Tuple, Iterable
 import collections
 import math
+from functools import partial
+import sys
 
 import rasterio
 import rasterio.features
@@ -15,7 +17,47 @@ from neuron_morphology.snap_polygons.types import (
     PolyType, LineType, TransformType, ensure_polygon, ensure_linestring
 )
 
+
+MultiPolygonResolverType = Callable[[Iterable[Polygon]], Polygon]
+
+
+def select_largest_subpolygon(polygons, error_threshold):
+
+    if isinstance(polygons, shapely.geometry.Polygon):
+        return polygons
+    elif len(polygons) == 1:
+        return polygons[0]
+
+    largest = (-float("inf"), None)
+    second = (-float("inf"), None)
+    for subpolygon in polygons:
+        area = subpolygon.area
+
+        if area < sys.float_info.epsilon:
+            continue
+
+        if area > largest[0]:
+            second = largest
+            largest = (area, subpolygon)
+
+    if second[1] is None:
+        return largest[1]
+
+    ratio = largest[0] / second[0]
+    if ratio < error_threshold:
+        raise ValueError(
+            "no definitive largest polygon. "
+            f"{largest[0]} / {second[0]} = {ratio} < {error_threshold}"
+        )
+    return largest[1]
+
+
 class Geometries:
+
+    default_multipolygon_resolver = partial(
+        select_largest_subpolygon, 
+        error_threshold=-float("inf")
+    )
 
     def __init__(self):
         """ A collection of polygons and lines
@@ -161,7 +203,6 @@ class Geometries:
 
         return stack
 
-
     def transform(
         self,
         transform: TransformType
@@ -185,9 +226,14 @@ class Geometries:
 
         return out
 
-    def fill_gaps(self, working_scale: float = 1.0) -> "Geometries":
+    def fill_gaps(
+            self, 
+            working_scale: float = 1.0, 
+            multipolygon_resolver: Optional[MultiPolygonResolverType] = None
+    ) -> "Geometries":
         """
         """
+        multipolygon_resolver = multipolygon_resolver or self.default_multipolygon_resolver
 
         scale_to_working = make_scale(working_scale)
         working_geometries = self.transform(scale_to_working)
@@ -195,7 +241,7 @@ class Geometries:
         raster_stack = working_geometries.rasterize()
         clear_overlaps(raster_stack)
         closest, closest_names = closest_from_stack(raster_stack)
-        snapped_polygons = get_snapped_polys(closest, closest_names)
+        snapped_polygons = get_snapped_polys(closest, closest_names, multipolygon_resolver)
 
         result_geometries = Geometries()
         result_geometries.register_polygons(snapped_polygons)
@@ -212,11 +258,16 @@ class Geometries:
                 .transform(scale_from_working)
         )
 
-    def cut(self, template) -> "Geometries":
+    def cut(self, template: shapely.geometry.Polygon, multipolygon_resolver: Optional[MultiPolygonResolverType] = None) -> "Geometries":
+        """
+        """
+        multipolygon_resolver = multipolygon_resolver or self.default_multipolygon_resolver
         result = Geometries()
 
         for key, polygon in self.polygons.items():
-            result.register_polygon(key, polygon.intersection(template))
+            polygon = polygon.intersection(template)
+            polygon = multipolygon_resolver(polygon)
+            result.register_polygon(key, polygon)
 
         for key, surface in self.surfaces.items():
             result.register_surface(key, surface.intersection(template))
@@ -255,6 +306,7 @@ class Geometries:
                 for name, surf in self.surfaces.items()
             ]
         }
+
 
 def rasterize(
     geometry: shapely.geometry.base.BaseGeometry,
@@ -350,7 +402,8 @@ def closest_from_stack(stack: Dict[str, np.ndarray]):
 
 def get_snapped_polys(
     closest: np.ndarray,
-    name_lut : Dict[int, str]
+    name_lut : Dict[int, str],
+    multipolygon_resolver: MultiPolygonResolverType
 ) -> Dict[str, Polygon]:
     """ Obtains named shapes from a label image.
 
@@ -365,26 +418,17 @@ def get_snapped_polys(
 
     """
 
-    putative_polys = rasterio.features.shapes(closest.astype(np.uint16))
-    # check for multiple polygons per label
-    # pick largest if multiple exist
-    polys, labels = zip(*putative_polys)
-    labels_arr = np.array(labels)
-    results_dict = {}
-    for l in np.unique(labels_arr):
-        if np.sum(labels_arr == l) > 1:
-            biggest_poly_area = 0
-            for ind in np.flatnonzero(labels_arr == l):
-                cur_poly = Polygon(polys[ind]["coordinates"][0])
-                if cur_poly.area > biggest_poly_area:
-                    biggest_poly = cur_poly
-                    biggest_poly_area = biggest_poly.area
-            results_dict[name_lut[int(l)]] = biggest_poly
-        else:
-            ind = np.flatnonzero(labels_arr == l)[0]
-            results_dict[name_lut[int(l)]] = Polygon(polys[ind]["coordinates"][0])
+    polygons = collections.defaultdict(list)
+    for obtained, label in rasterio.features.shapes(closest.astype(np.uint16)):
+        key = name_lut[label]
+        for coords in obtained["coordinates"]:
+            polygons[key].append(Polygon(coords))
 
-    return results_dict
+    for key in list(polygons.keys()):
+        polygons[key] = multipolygon_resolver(polygons[key])
+
+    return polygons
+
 
 def find_vertical_surfaces(
     polygons: Dict[str, Polygon],
@@ -454,16 +498,6 @@ def shared_faces(poly, others):
             continue
         _forward, backward = geom_collection
         faces = shapely.ops.linemerge(backward)
-
-        if isinstance(faces, shapely.geometry.multilinestring.MultiLineString):
-            mlen = -1
-            new_faces = None
-            for item in faces:
-                clen = len(item.coords)
-                if clen > mlen:
-                    mlen = clen
-                    new_faces = item
-            faces = new_faces
 
         if not faces.is_empty:
             faces_list.append(faces)

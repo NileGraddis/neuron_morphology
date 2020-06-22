@@ -78,7 +78,8 @@ def run_snap_polygons(
     layer_order,
     working_scale: float,
     images=None,
-    surface_distance_threshold: float = 400.0
+    surface_distance_threshold: float = 400.0,
+    multipolygon_error_threshold: float = 10**4
 ):
     """
     """
