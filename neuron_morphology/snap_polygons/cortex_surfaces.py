@@ -149,6 +149,7 @@ def remove_duplicates(coords: Iterable[Point]) -> List[Point]:
 
     out = [coords[0]]
     for coord in coords[1:]:
+        coord = Point(coord)
         if coord != out[-1]:
             out.append(coord)
 
