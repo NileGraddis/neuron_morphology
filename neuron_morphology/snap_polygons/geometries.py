@@ -14,19 +14,25 @@ from scipy import ndimage
 
 from neuron_morphology.snap_polygons.bounding_box import BoundingBox
 from neuron_morphology.snap_polygons.types import (
-    PolyType, LineType, TransformType, ensure_polygon, ensure_linestring
+    PolyType, LineType, TransformType, ensure_polygon, ensure_linestring,
+    MultiPolygonResolverType
 )
-
-
-MultiPolygonResolverType = Callable[[Iterable[Polygon]], Polygon]
 
 
 def select_largest_subpolygon(polygons, error_threshold):
 
     if isinstance(polygons, shapely.geometry.Polygon):
         return polygons
-    elif len(polygons) == 1:
+    
+    polygons = [
+        poly for poly in polygons 
+        if poly.area > sys.float_info.epsilon
+    ]
+
+    if len(polygons) == 1:
         return polygons[0]
+    elif len(polygons) == 0:
+        raise ValueError("No argued geometries with nonzero area")
 
     largest = (-float("inf"), None)
     second = (-float("inf"), None)
@@ -39,9 +45,6 @@ def select_largest_subpolygon(polygons, error_threshold):
         if area > largest[0]:
             second = largest
             largest = (area, subpolygon)
-
-    if second[1] is None:
-        return largest[1]
 
     ratio = largest[0] / second[0]
     if ratio < error_threshold:
