@@ -45,6 +45,8 @@ def select_largest_subpolygon(polygons, error_threshold):
         if area > largest[0]:
             second = largest
             largest = (area, subpolygon)
+        elif area > second[0]:
+            second = (area, subpolygon)
 
     ratio = largest[0] / second[0]
     if ratio < error_threshold:
@@ -340,13 +342,24 @@ def rasterize(
     )
 
 
-def make_translation(horizontal, vertical):
+def make_translation(horizontal: float, vertical: float) -> TransformType:
+    """Utility for building a 2D translation transform
+
+    Parameters
+    ----------
+    horizontal : translate by this much along the first axis
+    vertical : translate by this much along the second axis
+
+    Returns
+    -------
+    Function which applies the argued translation
+    """
     return lambda ht, vt: (ht + horizontal, vt + vertical)
 
 
 def make_scale(
     scale: float = 1.0
-) -> Callable[[float, float], Tuple[float, float]]:
+) -> TransformType:
     """ A utility for making a 2D scale transform, suitable for transforming
     bounding boxes and Geometries
 
@@ -478,7 +491,7 @@ def find_vertical_surfaces(
 
     return results
 
-def shared_faces(poly, others):
+def shared_faces(poly: Polygon, others: Iterable[Polygon]) -> LineString:
     """ Given a polygon and a set of other polygons that could be adjacent on the same
     side, find and connect that shared face.
 
@@ -495,8 +508,8 @@ def shared_faces(poly, others):
     """
 
     faces_list = []
-    for o in others:
-        geom_collection = shapely.ops.shared_paths(poly.exterior, o.exterior)
+    for other in others:
+        geom_collection = shapely.ops.shared_paths(poly.exterior, other.exterior)
         if geom_collection.is_empty:
             continue
         _forward, backward = geom_collection
