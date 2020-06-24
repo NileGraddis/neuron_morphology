@@ -1,9 +1,14 @@
+"""CLI schemas for the inputs to and outputs from snap_polygons.
+"""
 from argschema.schemas import ArgSchema, DefaultSchema
 from argschema.fields import (
     Nested, String, List, Float, InputFile, OutputFile, Int)
 
 
 class SimpleGeometry(DefaultSchema):
+    """A named planar geometry
+    """
+
     name = String(
         description="identifier for this layer", 
         required=True
@@ -16,7 +21,11 @@ class SimpleGeometry(DefaultSchema):
         required=True
     )
 
+
 class Image(DefaultSchema):
+    """A specification for a diagnostic overlay image
+    """
+
     input_path = InputFile(
         description="Read the image from here",
         required=True
@@ -43,7 +52,11 @@ class Image(DefaultSchema):
         default=["before", "after"]
     )
 
+
 class InputParameters(ArgSchema):
+    """Top-level schema for inputs to snap_polygons
+    """
+
     layer_polygons = Nested(
         SimpleGeometry,
         description=(
@@ -114,8 +127,9 @@ class InputParameters(ArgSchema):
             "If an intermediate stage cuts an obtained polygon into multiple "
             "components, we reject all but the largest by area. This is fine "
             "when there is a clear main polygon, but less so when there are "
-            "several of similar size. Therefore, we reject the largest polygon "
-            "unless its area is at least this many times the second largest's."
+            "several of similar size. Therefore, we reject the largest "
+            "polygon unless its area is at least this many times the second "
+            "largest's."
         ),
         default=10**4,
         required=True
@@ -123,6 +137,9 @@ class InputParameters(ArgSchema):
 
 
 class OutputImage(DefaultSchema):
+    """Metadata describing an output diagnoctic overlay image.
+    """
+
     input_path = InputFile(
         description="The base image was read from here",
         required=True
@@ -142,7 +159,11 @@ class OutputImage(DefaultSchema):
         required=True,
     )
 
+
 class OutputParameters(DefaultSchema):
+    """Top-level schema for snap_polygons outputs.
+    """
+
     inputs = Nested(
         InputParameters, 
         description="The parameters argued to this executable",
