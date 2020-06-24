@@ -3,6 +3,7 @@ import collections
 import math
 from functools import partial
 import sys
+import itertools as it
 
 import rasterio
 import rasterio.features
@@ -15,18 +16,33 @@ from scipy import ndimage
 from neuron_morphology.snap_polygons.bounding_box import BoundingBox
 from neuron_morphology.snap_polygons.types import (
     PolyType, LineType, TransformType, ensure_polygon, ensure_linestring,
-    MultiPolygonResolverType
+    MultiPolygonResolverType, MultiSurfaceResolvertype
 )
 
 
-def select_largest_subpolygon(polygons, error_threshold):
+def select_largest_subpolygon(
+        polygons: Union[Polygon, Iterable[Polygon]], 
+        error_threshold: float
+) -> Polygon:
+    """Given a collection of polygons, find the largest by area.
+
+    Parameters
+    ----------
+    polygons : To be filtered
+    error_threshold : If the ratio of the largest polygon to the second 
+        largest does not meet or exceed this value, reject the largest polygon.
+
+    Returns
+    -------
+    the largest polygon
+    """
 
     if isinstance(polygons, shapely.geometry.Polygon):
         return polygons
     
     polygons = [
         poly for poly in polygons 
-        if poly.area > sys.float_info.epsilon
+        if poly.area >= sys.float_info.epsilon
     ]
 
     if len(polygons) == 1:
@@ -57,12 +73,33 @@ def select_largest_subpolygon(polygons, error_threshold):
     return largest[1]
 
 
+def safe_linemerge(linestrings: Union[LineString, Iterable[LineString]]):
+    """
+    """
+
+    if isinstance(linestrings, LineString):
+        return linestrings
+    
+    if len(linestrings) == 1:
+        return linestrings[0]
+    elif len(linestrings) == 0:
+        raise ValueError("Must argue at least one linestring")
+
+    return shapely.ops.linemerge(linestrings)
+
+
 class Geometries:
 
-    default_multipolygon_resolver = partial(
-        select_largest_subpolygon, 
-        error_threshold=-float("inf")
-    )
+    @property
+    def default_multipolygon_resolver(self):
+        return partial(
+            select_largest_subpolygon, 
+            error_threshold=-float("inf")
+        )
+
+    @property
+    def default_multisurface_resolver(self):
+        return safe_linemerge
 
     def __init__(self):
         """ A collection of polygons and lines
@@ -236,7 +273,23 @@ class Geometries:
             working_scale: float = 1.0, 
             multipolygon_resolver: Optional[MultiPolygonResolverType] = None
     ) -> "Geometries":
-        """
+        """Expand this geometries' polygons to fill its bounding box, using 
+        distance to assign empty space.
+
+        Parameters
+        ----------
+        working_scale : The filling is carried out in a raster space, with 1 
+            pixel corresponding to 1 unit in the coordinate system of your 
+            polygons. You can optionally rescale the polygons before 
+            rasterizing.
+        multipolygon_resolver : This method might obtain multiple output 
+            polygons for a given input polygon. This callable collapses them 
+            into a single geometry. The default selects the largest.
+
+        Returns
+        -------
+        A copy of this geometries object with the entire bounding box having 
+        been filled.
         """
         multipolygon_resolver = multipolygon_resolver or self.default_multipolygon_resolver
 
@@ -257,16 +310,39 @@ class Geometries:
         )
         scale_from_working = make_scale(1.0 / working_scale)
 
-        return (
+        result_geometries = (
             result_geometries
                 .transform(translation_from_working)
                 .transform(scale_from_working)
         )
+        result_geometries.register_surfaces(self.surfaces)
+        return result_geometries
 
-    def cut(self, template: shapely.geometry.Polygon, multipolygon_resolver: Optional[MultiPolygonResolverType] = None) -> "Geometries":
-        """
+    def cut(
+            self, 
+            template: shapely.geometry.Polygon, 
+            multipolygon_resolver: Optional[MultiPolygonResolverType] = None,
+            multisurface_resolver: Optional[MultiSurfaceResolvertype] = None
+    ) -> "Geometries":
+        """Crop this Geometries' polygons and surfaces onto a provided template.
+
+        Parameters
+        ----------
+        template : portions of surfaces and polygons outside this shape will be 
+            removed
+        multipolygon_resolver : This callable is applied to the outputs of 
+            the intersection operation in order to resolve cases where a 
+            polygon has been cut into multiple components. The default method 
+            selects the largest by area.
+        multisurface_resolver : As multipolygon resolver, for surfaces. The 
+            default method attempts to merge the surfaces.
+
+        Returns
+        -------
+        A copy of this Geometries object, with polygons and surfaces cropped
         """
         multipolygon_resolver = multipolygon_resolver or self.default_multipolygon_resolver
+        multisurface_resolver = multisurface_resolver or self.default_multisurface_resolver
         result = Geometries()
 
         for key, polygon in self.polygons.items():
@@ -275,20 +351,43 @@ class Geometries:
             result.register_polygon(key, polygon)
 
         for key, surface in self.surfaces.items():
-            result.register_surface(key, surface.intersection(template))
+            surface = surface.intersection(template)
+            surface = multisurface_resolver(surface)
+            result.register_surface(key, surface)
     
         return result
 
-    def convex_hull(self):
+    def convex_hull(
+            self, 
+            surfaces: bool = True, 
+            polygons: bool = True
+    ) -> Polygon:
+        """Find the convex hull of these geometries.
+
+        Parameters
+        ----------
+        surfaces : if True, include surfaces in the hull
+        polygons : if True, include polygons in the hull
+
+        Returns
+        -------
+        The convex hull of the included geometries
+        """
         hull = None
-        for polygon in self.polygons.values():
+        geometries = []
+        if surfaces:
+            geometries = it.chain(geometries, self.surfaces.values())
+        if polygons:
+            geometries = it.chain(geometries, self.polygons.values())
+
+        for geometry in geometries:
             if hull is None:
                 # why the intermediate hull-taking? Some layer polygons have 
                 # loops at the corners. This breaks the union operation, since
                 # they don't have a defined interior/exterior.
-                hull = polygon.convex_hull
+                hull = geometry.convex_hull
             else:
-                hull = polygon.convex_hull.union(hull)
+                hull = geometry.convex_hull.union(hull)
         return hull.convex_hull
 
     def to_json(self) -> Dict:

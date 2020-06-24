@@ -83,6 +83,7 @@ class TestGeometries(TestCase):
         self.assertEqual(len(obt["surfaces"]), 2)
         self.assertEqual(len(obt["polygons"]), 2)
 
+
 @requires_rasterio
 class TestGeometriesSnap(TestCase):
 
@@ -126,6 +127,9 @@ class TestGeometriesSnap(TestCase):
                 obt = obtained.polygons[key]
                 print(key, obt, expt)
                 self.assertEqual(obt, expt)
+
+    def test_convex_hull(self):
+        self.assertEqual(self.geo.convex_hull(surfaces=False).area, 25)
 
 
 @requires_rasterio

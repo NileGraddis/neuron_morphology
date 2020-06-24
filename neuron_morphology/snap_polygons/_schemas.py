@@ -100,6 +100,26 @@ class InputParameters(ArgSchema):
             "Layer6b"    
         ]
     )
+    surface_distance_threshold = Float(
+        description=(
+            "Pia and white matter surfaces that extend farther from the layer "
+            "polygons than this value will be cut off. Units should match "
+            "surfaces and layer polygons"
+        ),
+        default=400.0,
+        required=True
+    )
+    multipolygon_error_threshold = Float(
+        description=(
+            "If an intermediate stage cuts an obtained polygon into multiple "
+            "components, we reject all but the largest by area. This is fine "
+            "when there is a clear main polygon, but less so when there are "
+            "several of similar size. Therefore, we reject the largest polygon "
+            "unless its area is at least this many times the second largest's."
+        ),
+        default=10**4,
+        required=True
+    )
 
 
 class OutputImage(DefaultSchema):

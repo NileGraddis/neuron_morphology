@@ -1,5 +1,6 @@
 import logging
 import copy as cp
+from functools import partial
 
 import shapely
 import numpy as np
@@ -11,7 +12,7 @@ from neuron_morphology.snap_polygons._schemas import (
 from neuron_morphology.snap_polygons._from_lims import FromLimsSource
 from neuron_morphology.snap_polygons.geometries import (
     Geometries, make_scale, clear_overlaps, closest_from_stack, 
-    get_snapped_polys, find_vertical_surfaces
+    get_snapped_polys, find_vertical_surfaces, select_largest_subpolygon
 )
 from neuron_morphology.snap_polygons.cortex_surfaces import trim_to_close
 from neuron_morphology.snap_polygons.types import ensure_linestring
@@ -25,9 +26,9 @@ def run_snap_polygons(
     wm_surface, 
     layer_order,
     working_scale: float,
-    images=None,
-    surface_distance_threshold: float = 400.0,
-    multipolygon_error_threshold: float = 10**4
+    surface_distance_threshold: float,
+    multipolygon_error_threshold: float,
+    images=None
 ):
     """
     """
@@ -47,11 +48,16 @@ def run_snap_polygons(
     pia_wm_vertices = get_vertices_from_two_lines(pia.coords[:], wm.coords[:])
     bounds = shapely.geometry.polygon.Polygon(pia_wm_vertices)
 
+    multipolygon_resolver = partial(
+        select_largest_subpolygon, 
+        error_threshold=multipolygon_error_threshold
+    )
+
     # go!
     result_geos = (
         geometries
-        .fill_gaps(working_scale)
-        .cut(bounds)
+        .fill_gaps(working_scale, multipolygon_resolver=multipolygon_resolver)
+        .cut(bounds, multipolygon_resolver=multipolygon_resolver)
     )
 
     # get output surfaces
